@@ -151,6 +151,20 @@ CALCULATED_KEYS = {
     "Resmi Tatil Saat": "resmi_tatil_mesai_dk",
     "Toplam Saat": "toplam_dk",
 }
+PERSONNEL_RECORD_COLUMNS = [
+    "Ä°sim",
+    "Departman",
+    "TÃ¼r",
+    "BaÅŸlangÄ±Ã§ Tarihi",
+    "BaÅŸlangÄ±Ã§ Saati",
+    "BitiÅŸ Tarihi",
+    "BitiÅŸ Saati",
+    "HaftaiÃ§i Saat",
+    "Cumartesi Saat",
+    "Resmi Tatil Saat",
+    "Toplam Saat",
+    "AÃ§Ä±klama",
+]
 SETTINGS_PASSWORD = "1111"
 
 
@@ -166,6 +180,7 @@ class PersonelTakipApp(tk.Tk):
         self.report_missing_modules = self.missing_report_modules()
         self.columns = list(config["columns"])
         self.input_columns = list(config["input_columns"])
+        self.personnel_record_columns = self.resolve_personnel_record_columns()
         self.rows: list[dict[str, str]] = []
         self.filtered_indices: list[int] = []
         self.current_page = 0
@@ -218,6 +233,20 @@ class PersonelTakipApp(tk.Tk):
         if fallback is not None:
             return fallback
         return self.theme["background_color"]
+
+    def resolve_personnel_record_columns(self) -> list[str]:
+        configured_columns = list(self.config_data.get("columns", []))
+        if configured_columns:
+            return configured_columns
+        return list(PERSONNEL_RECORD_COLUMNS)
+
+    def personnel_export_row(self, row: dict[str, str]) -> dict[str, str]:
+        display = self.display_row(row)
+        return {column: display.get(column, "") for column in self.personnel_record_columns}
+
+    def personnel_export_values(self, row: dict[str, str]) -> list[str]:
+        export_row = self.personnel_export_row(row)
+        return [export_row.get(column, "") for column in self.personnel_record_columns]
 
     def is_date_column(self, column: str) -> bool:
         return "Tarihi" in column
@@ -413,6 +442,7 @@ class PersonelTakipApp(tk.Tk):
         toolbar.pack(fill="x", padx=4, pady=(0, 8))
         ttk.Button(toolbar, text=self.label("open_csv", "CSV Aç"), command=self.open_csv).pack(side="left", padx=(0, 6))
         ttk.Button(toolbar, text=self.label("save_csv", "CSV Kaydet"), command=self.save_csv).pack(side="left", padx=(0, 6))
+        ttk.Button(toolbar, text=self.label("save_excel", "Excel Kaydet"), command=self.save_excel).pack(side="left", padx=(0, 6))
         ttk.Button(toolbar, text=self.label("example_row", "Örnek Satır"), command=self.fill_example).pack(side="left")
         ttk.Button(toolbar, text=self.label("clear_filters", "Filtreleri Temizle"), command=self.clear_filters).pack(side="left", padx=(6, 0))
 
@@ -1381,7 +1411,7 @@ class PersonelTakipApp(tk.Tk):
             if not self.row_matches_kpi_person(row, person):
                 continue
             if self.clipped_row_for_month(row, month, year):
-                rows.append(dict(row))
+                rows.append(self.personnel_export_row(row))
         return rows
 
     def draw_report_pie_png(self, path: Path, title: str, values: list[tuple[str, int, str]]) -> None:
@@ -1604,9 +1634,9 @@ class PersonelTakipApp(tk.Tk):
 
         raw = wb.create_sheet("Ham Veriler")
         raw_rows = self.kpi_raw_rows_for_report(person, month, year)
-        raw.append(self.input_columns)
+        raw.append(self.personnel_record_columns)
         for row in raw_rows:
-            raw.append([row.get(column, "") for column in self.input_columns])
+            raw.append([row.get(column, "") for column in self.personnel_record_columns])
         for cell in raw[1]:
             cell.font = Font(bold=True)
             cell.fill = PatternFill("solid", fgColor="E8B4B8")
@@ -1998,11 +2028,11 @@ th{{background:#001F5B;color:white}} td,th{{padding:9px;border:1px solid #eee;te
         selected = self.tree.selection()
         if not selected:
             return "break"
-        lines = ["\t".join(self.input_columns)]
+        lines = ["\t".join(self.personnel_record_columns)]
         for item in selected:
             index = int(item)
             if 0 <= index < len(self.rows):
-                lines.append("\t".join(self.rows[index].get(column, "") for column in self.input_columns))
+                lines.append("\t".join(self.personnel_export_values(self.rows[index])))
         self.clipboard_clear()
         self.clipboard_append("\n".join(lines))
         return "break"
@@ -2135,11 +2165,41 @@ th{{background:#001F5B;color:white}} td,th{{padding:9px;border:1px solid #eee;te
             return
         try:
             with open(path, "w", encoding="utf-8-sig", newline="") as file:
-                writer = csv.DictWriter(file, fieldnames=self.input_columns)
+                writer = csv.DictWriter(file, fieldnames=self.personnel_record_columns)
                 writer.writeheader()
-                writer.writerows(self.rows)
+                for row in self.rows:
+                    writer.writerow(self.personnel_export_row(row))
         except Exception as exc:
             messagebox.showerror("CSV kaydedilemedi", str(exc))
+
+    def save_excel(self) -> None:
+        path = filedialog.asksaveasfilename(defaultextension=".xlsx", filetypes=[("Excel dosyalarÄ±", "*.xlsx"), ("TÃ¼m dosyalar", "*.*")])
+        if not path:
+            return
+        try:
+            from openpyxl import Workbook
+            from openpyxl.styles import Font, PatternFill
+        except ModuleNotFoundError as exc:
+            missing = exc.name or "openpyxl"
+            messagebox.showerror("Excel kaydedilemedi", f"Excel dÄ±ÅŸa aktarma iÃ§in gerekli kÃ¼tÃ¼phane eksik.\n\nEksik modÃ¼l: {missing}\n\nKurulum:\npip install openpyxl")
+            return
+        try:
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "Personel KayÄ±tlarÄ±"
+            ws.append(self.personnel_record_columns)
+            for row in self.rows:
+                ws.append(self.personnel_export_values(row))
+            for cell in ws[1]:
+                cell.font = Font(bold=True)
+                cell.fill = PatternFill("solid", fgColor="E8B4B8")
+            for column_cells in ws.columns:
+                column_letter = column_cells[0].column_letter
+                max_length = max(len(str(cell.value or "")) for cell in column_cells)
+                ws.column_dimensions[column_letter].width = min(max(max_length + 2, 14), 32)
+            wb.save(path)
+        except Exception as exc:
+            messagebox.showerror("Excel kaydedilemedi", str(exc))
 
 def main() -> None:
     try:
